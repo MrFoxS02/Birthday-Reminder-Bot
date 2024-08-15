@@ -54,12 +54,22 @@ async def process_upcoming_birthdays(callback_query: types.CallbackQuery):
     today = datetime.today().date()
     ten_days_later = today + timedelta(days=10)
 
-    cursor.execute("SELECT name, birthday FROM birthdays WHERE birthday BETWEEN ? AND ?", (today, ten_days_later))
+    cursor.execute("SELECT name, birthday FROM birthdays")
     birthdays = cursor.fetchall()
 
-    if birthdays:
-        upcoming_birthdays = "\n".join([f"{name} - {birthday}" for name, birthday in birthdays])
-        await bot.send_message(callback_query.from_user.id, text=f"Ближайшие дни рождения:\n{upcoming_birthdays}")
+    upcoming_birthdays = []
+
+    for name, birthday in birthdays:
+        birthday_date = datetime.strptime(birthday, "%Y-%m-%d").date()
+
+        # Игнорируем год при сравнении, учитываем только день и месяц
+        this_year_birthday = birthday_date.replace(year=today.year)
+        
+        if today <= this_year_birthday <= ten_days_later:
+            upcoming_birthdays.append(f"{name} - {this_year_birthday.strftime('%d %b')}")
+
+    if upcoming_birthdays:
+        await bot.send_message(callback_query.from_user.id, text="Ближайшие дни рождения:\n" + "\n".join(upcoming_birthdays))
     else:
         await bot.send_message(callback_query.from_user.id, text="В ближайшие 10 дней дней рождений нет.")
 
