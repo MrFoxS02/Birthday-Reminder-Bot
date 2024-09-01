@@ -1,119 +1,218 @@
-import asyncio
-import logging
 import sqlite3
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from datetime import datetime, timedelta
+import asyncio
+import logging
 
-# Подключение к базе данных
-conn = sqlite3.connect('birthdays.db')
+logging.basicConfig(level=logging.INFO)
+
+API_TOKEN = ''
+
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher(storage=MemoryStorage())
+
+# Подключение к базе данных SQLite
+conn = sqlite3.connect('users.db')
 cursor = conn.cursor()
 
 # Создание таблицы users, если она не существует
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY
-)
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER,
+    full_name TEXT,
+    birth_date TEXT,
+    family_state TEXT)
 ''')
 conn.commit()
 
-# Включаем логирование, чтобы не пропустить важные сообщения
-logging.basicConfig(level=logging.INFO)
 
-# Объект бота
-bot = Bot(token="7529165450:AAHoBKyKSYAToSvK6U-Cvpl6l8WlkutA_70")  # Замените на ваш токен
-# Диспетчер
-dp = Dispatcher()
+class Form(StatesGroup):
+    full_name = State()
+    birth_date = State()
+    family_state = State()
 
-# Функция для проверки дней рождения
-async def check_birthdays():
-    today = datetime.today().date()
-    tomorrow = today + timedelta(days=1)
-
-    cursor.execute("SELECT name, birthday FROM birthdays")
-    birthdays = cursor.fetchall()
-
-    messages = []
-    for name, birthday in birthdays:
-        birthday_date = datetime.strptime(birthday, "%Y-%m-%d").date()
-
-        if birthday_date == today:
-            messages.append(f"Сегодня день рождения у {name}!")
-        elif birthday_date == tomorrow:
-            messages.append(f"Завтра день рождения у {name}!")
-
-    return messages
-
-# Функция для ежедневной проверки и отправки напоминаний
-async def daily_birthday_check():
-    while True:
-        messages = await check_birthdays()
-        if messages:
-            # Отправка сообщений всем пользователям, которые запустили бота
-            cursor.execute("SELECT user_id FROM users")
-            users = cursor.fetchall()
-            for user_id in users:
-                for message in messages:
-                    await bot.send_message(user_id[0], message)
-        await asyncio.sleep(86400)  # Ожидание 24 часов
+def save_data(user_id, full_name, birth_date, family_state,):
+    cursor.execute('''
+    INSERT INTO users (user_id, full_name, birth_date, family_state)
+    VALUES (?, ?, ?, ?)
+    ''', (user_id, full_name, birth_date, family_state))
+    conn.commit()
 
 # Хэндлер на команду /start
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    # Добавление пользователя в базу данных
-    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
-    conn.commit()
-
-    # Проверка на ближайшие дни рождения
-    upcoming_birthdays = await check_upcoming_birthdays()
-
-    # Создание кнопки для просмотра ближайших дней рождения
-    keyboard = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="Дни рождения в ближайшие 10 дней")],
-    ], resize_keyboard=True)
-
-    greeting_message = "Привет! Я бот, который напоминает о днях рождения."
+    user_id = message.from_user.id
     
-    if upcoming_birthdays:
-        greeting_message += "\n\nБлижайшие дни рождения:\n" + "\n".join(upcoming_birthdays)
+    # Проверяем, существует ли запись о пользователе
+    cursor.execute('SELECT * FROM users_id WHERE user_id = ?', (user_id))
+    user = cursor.fetchone()
     
-    await message.reply(greeting_message, reply_markup=keyboard)
+    if not user:
+        # Если не существует, добавляем его в БД с пустыми данными
+        save_data(user_id, None, None, None, None)
+    
+    # Создаем объект клавиатуры
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Панель управления")]
+        ],
+        resize_keyboard=True
+    )
+    
+    # Отправляем сообщение с клавиатурой
+    await message.answer("Привет! Я бот-напоминалка о семейных событиях.", reply_markup=keyboard)
 
-# Функция для проверки дней рождений в ближайшие 10 дней
-async def check_upcoming_birthdays():
-    today = datetime.today().date()
-    ten_days_later = today + timedelta(days=10)
+@dp.message(lambda message: message.text == "Панель управления")
+async def process_panel_control(message: types.Message):
+    # Клавиатура с опциями
+    keyboard = ReplyKeyboardMarkup(
+        resize_keyboard=True,
+        keyboard=[
+            [KeyboardButton(text="Добавить новый день рождения")],
+            [KeyboardButton(text="Ближайшие дни рождения")]
+        ]
+    )
+    await message.answer("Выберите действие:", reply_markup=keyboard)
 
-    cursor.execute("SELECT name, birthday FROM birthdays")
-    birthdays = cursor.fetchall()
+async def process_panel_control(message: types.Message):
+    # Клавиатура с опциями
+    keyboard = ReplyKeyboardMarkup(
+        resize_keyboard=True,
+        keyboard=[
+            [KeyboardButton(text="Добавить новый день рождения")],
+            [KeyboardButton(text="Ближайшие дни рождения")]
+        ]
+    )
+    await message.answer("Выберите действие:", reply_markup=keyboard)
 
-    upcoming_birthdays = []
+@dp.message(lambda message: message.text == "Добавить новый день рождения")
+async def add_birthday(message: types.Message, state: FSMContext):
+    await message.answer("Введите полное имя:")
+    await state.set_state(Form.full_name)
 
-    for name, birthday in birthdays:
-        birthday_date = datetime.strptime(birthday, "%Y-%m-%d").date()
-        this_year_birthday = birthday_date.replace(year=today.year)
-        
-        if today <= this_year_birthday <= ten_days_later:
-            upcoming_birthdays.append(f"{name} - {this_year_birthday.strftime('%d %b')}")
+@dp.message(Form.full_name)
+async def process_full_name(message: types.Message, state: FSMContext):
+    await state.update_data(full_name=message.text)
+    await message.answer("Введите дату рождения в формате ДД.ММ.ГГГГ:")
+    await state.set_state(Form.birth_date)
 
-    return upcoming_birthdays
+@dp.message(Form.birth_date)
+async def process_birth_date(message: types.Message, state: FSMContext):
+    try:
+        # Проверка корректности ввода даты
+        birth_date = datetime.strptime(message.text, "%d.%m.%Y").strftime("%d.%m.%Y")
+    except ValueError:
+        await message.answer("Пожалуйста, введите корректную дату в формате ДД.ММ.ГГГГ:")
+        return
+    
+    await state.update_data(birth_date=birth_date)
+    await message.answer("Кем вам приходится указанный член семьи")
+    await state.set_state(Form.family_state)
+    
+@dp.message(Form.family_state)
+async def process_family_state(message: types.Message, state: FSMContext):
+    await state.update_data(family_state=message.text)
 
-# Хэндлер для обработки нажатия на кнопку
-@dp.message(lambda message: message.text == "Дни рождения в ближайшие 10 дней")
-async def process_upcoming_birthdays(message: types.Message):
-    upcoming_birthdays = await check_upcoming_birthdays()
+    
+    # Получаем сохраненные данные из состояния
+    data = await state.get_data()
+    full_name = data.get('full_name')
+    birth_date = data.get('birth_date')
+    family_state = data.get('family_state')
+    user_id = message.from_user.id
+    
+    # Сохраняем данные пользователя в БД
+    save_data(user_id, full_name, birth_date, family_state)
+    
+    # Отправляем сообщение об успешном добавлении
+    await message.answer(f'Данные о дне рождения для {full_name} успешно добавлены.')
+    
+    # Выводим панель управления
+    await process_panel_control(message)
+    
+    # Сбрасываем состояние
+    await state.clear()
 
-    if upcoming_birthdays:
-        await message.reply("Ближайшие дни рождения:\n" + "\n".join(upcoming_birthdays))
+@dp.message(lambda message: message.text == "Ближайшие дни рождения")
+async def nearest_birthdays(message: types.Message):
+    upcoming = []
+    days = 30
+    user_id = message.from_user.id
+    cursor.execute('''
+    SELECT full_name, birth_date FROM users
+    WHERE user_id = ?
+    ORDER BY birth_date ASC
+    ''', (user_id,))
+    results = cursor.fetchall()
+
+    print(results)
+
+    if results:
+        today = datetime.today()
+        for name, birth_date in results:
+            if birth_date:
+                birth_date = datetime.strptime(birth_date, '%d.%m.%Y')
+
+                # Переводим дату рождения на текущий год
+                next_birthday = birth_date.replace(year=today.year)
+
+                # Если день рождения уже прошел в этом году, переносим на следующий год
+                if next_birthday < today:
+                    next_birthday = next_birthday.replace(year=today.year + 1)
+
+                # Добавляем в список, если день рождения в ближайшие 30 дней
+                delta = (next_birthday - today).days
+                if 0 <= delta <= days:
+                    upcoming.append((name, next_birthday))
+
+        # Сортируем по дате
+        upcoming.sort(key=lambda x: x[1])
+
+        # Формируем ответное сообщение
+        if upcoming:
+            response = "Ближайшие дни рождения:\n"
+            for name, date in upcoming:
+                response += f"{name}: {date.strftime('%d.%m.%Y')}\n"
+        else:
+            response = "Нет дней рождений в ближайшие 30 дней."
     else:
-        await message.reply("В ближайшие 10 дней дней рождений нет.")
+        response = "Нет сохраненных дней рождений."
+    
+    await message.answer(response)
 
-# Главная функция для запуска бота
+
+async def daily_reminder():
+    while True:
+        now = datetime.now()
+        target_time = now.replace(hour=16, minute=8, second=30, microsecond=0)
+        if now > target_time:
+            target_time += timedelta(days=1)
+        
+        await asyncio.sleep((target_time - now).total_seconds())
+
+        today = datetime.today().strftime("%d.%m")
+
+        # Используем substr для извлечения дня и месяца из birth_date
+        cursor.execute('''
+            SELECT user_id, full_name FROM users
+            WHERE substr(birth_date, 1, 5) = ?
+        ''', (today,))
+        birthdays_today = cursor.fetchall()
+
+        for user_id, full_name in birthdays_today:
+            await bot.send_message(user_id, f"Сегодня день рождения у {full_name}!")
+
 async def main():
-    # Запуск ежедневной проверки
-    asyncio.create_task(daily_birthday_check())
+    asyncio.create_task(daily_reminder())  # Запуск задачи для ежедневной проверки в 08:00
     await dp.start_polling(bot)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
+    dp.start_polling(bot)
+
     asyncio.run(main())
