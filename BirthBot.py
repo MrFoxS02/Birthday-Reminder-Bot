@@ -55,7 +55,7 @@ async def cmd_start(message: types.Message):
     
     if not user:
         # Если не существует, добавляем его в БД с пустыми данными
-        save_data(user_id, None, None, None, None)
+        save_data(user_id, None, None, None)
     
     # Создаем объект клавиатуры
     keyboard = ReplyKeyboardMarkup(
